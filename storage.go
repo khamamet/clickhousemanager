@@ -3,7 +3,6 @@ package clickhouseconn
 import (
 	"database/sql"
 	"encoding/json"
-	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,12 +13,21 @@ type ClickhouseStorage struct {
 	quit         int64
 	m            sync.Mutex
 	clickhouseDB *sql.DB
-	writeTime    time.Duration
-	fieldnames   []string
-	tablename    string
-	data         []map[string]interface{}
-	maxBatch     int
-	jsonFields   map[string]struct{}
+	config       TClickHouseConfig
+
+	writeTime  time.Duration
+	fieldnames []string
+	tablename  string
+	data       []map[string]interface{}
+	maxBatch   int
+	jsonFields map[string]struct{}
+	// retry policy
+	maxRetries  int           // maximum number of retries
+	backoffBase time.Duration // base delay between retries
+	backoffMax  time.Duration // maximum delay between retries
+
+	Metrics      Metrics
+	OnBatchError func(batch []map[string]interface{}, err error)
 }
 
 // InitClickhouseStorage
@@ -27,25 +35,29 @@ type ClickhouseStorage struct {
 // fieldnames - list of fields in the tablename
 // writetime - how often write data to table
 // maxbatch - if >0 then write data when data count >= maxbatch
-func InitClickhouseStorage(db *sql.DB, tablename string, fieldnames []string, writeTime time.Duration, maxbatch int, jsonFields []string) (*ClickhouseStorage, error) {
-	//check fieldnames in table
-	err := db.QueryRow("SELECT " + strings.Join(fieldnames, ",") + " FROM " + tablename + " LIMIT 1").Err()
+// jsonFields - список полей, которые нужно сериализовать в JSON-строку
+func InitClickhouseStorageWithConfig(config TClickHouseConfig, tablename string, fieldnames []string, writeTime time.Duration, maxbatch int, jsonFields []string, maxRetries int, backoffBase, backoffMax time.Duration) (*ClickhouseStorage, error) {
+	db, err := InitClickHouseDB(config)
 	if err != nil {
 		return nil, err
 	}
-	var res ClickhouseStorage
-	res.clickhouseDB = db
-	res.fieldnames = fieldnames
-	res.tablename = tablename
-	res.writeTime = writeTime
-	res.maxBatch = maxbatch
-	res.jsonFields = make(map[string]struct{})
+	res := &ClickhouseStorage{
+		clickhouseDB: db,
+		config:       config,
+		fieldnames:   fieldnames,
+		tablename:    tablename,
+		writeTime:    writeTime,
+		maxBatch:     maxbatch,
+		jsonFields:   make(map[string]struct{}),
+		maxRetries:   maxRetries,
+		backoffBase:  backoffBase,
+		backoffMax:   backoffMax,
+	}
 	for _, name := range jsonFields {
 		res.jsonFields[name] = struct{}{}
 	}
-	//start scheduler to regular write data
 	go res.work()
-	return &res, nil
+	return res, nil
 }
 
 // Add adds data to storage.
@@ -86,51 +98,135 @@ func (a *ClickhouseStorage) work() {
 		a.store()
 	}
 }
+
+// Exit - quit and store all data
 func (a *ClickhouseStorage) Exit() {
 	atomic.StoreInt64(&a.quit, 1)
 	a.store()
 }
+
+// Store - store data to Clickhouse manually
+func (a *ClickhouseStorage) Store() {
+	a.store()
+}
 func (a *ClickhouseStorage) store() {
-	var (
-		tx   *sql.Tx
-		stmt *sql.Stmt
-		err  error
-	)
-	sqlstr := "INSERT INTO  " + a.tablename + " (" + strings.Join(a.fieldnames, ",") + ") VALUES (" + strings.Repeat("?", len(a.fieldnames)) + ")"
-
-	if tx, err = a.clickhouseDB.Begin(); err != nil {
-		log.Println(err.Error())
-		return
-	}
-
-	if stmt, err = tx.Prepare(sqlstr); err != nil {
-		log.Println(err.Error())
-		return
-	}
 	a.m.Lock()
 	temp := make([]map[string]interface{}, len(a.data))
 	copy(temp, a.data)
 	a.data = nil
 	a.m.Unlock()
 
-	for i := range temp {
-		if _, err = stmt.Exec(buildArgs(a.fieldnames, temp[i])...); err != nil {
-			log.Println(err.Error())
-			a.m.Lock()
-			a.data = append(a.data, temp...)
-			a.m.Unlock()
-			tx.Rollback()
-			return
-		}
+	if len(temp) == 0 {
+		return
 	}
 
-	if err = tx.Commit(); err != nil {
-		log.Println(err.Error())
+	var (
+		try        int
+		batch      = temp
+		lastErr    error
+		backoffDur time.Duration
+	)
+
+	for try = 0; try <= a.maxRetries; try++ {
+		sqlstr := "INSERT INTO  " + a.tablename + " (" + strings.Join(a.fieldnames, ",") + ") VALUES (" + strings.Repeat("?", len(a.fieldnames)) + ")"
+
+		tx, err := a.clickhouseDB.Begin()
+		if err != nil {
+			lastErr = err
+		} else {
+			stmt, err := tx.Prepare(sqlstr)
+			if err != nil {
+				_ = tx.Rollback()
+				lastErr = err
+			} else {
+				success := true
+				for i := range batch {
+					if _, err = stmt.Exec(buildArgs(a.fieldnames, batch[i])...); err != nil {
+						success = false
+						lastErr = err
+						break
+					}
+				}
+				if success {
+					if err = tx.Commit(); err != nil {
+						lastErr = err
+					} else {
+						a.Metrics.IncSuccess(len(batch))
+						return // SUCCESS
+					}
+				} else {
+					_ = tx.Rollback()
+				}
+			}
+		}
+
+		// --- Переконнект при потере соединения ---
+		if isConnErr(lastErr) {
+			if recErr := a.reconnectDB(); recErr == nil {
+				// После реконнекта — одна быстрая попытка без увеличения try
+				sqlstr := "INSERT INTO  " + a.tablename + " (" + strings.Join(a.fieldnames, ",") + ") VALUES (" + strings.Repeat("?", len(a.fieldnames)) + ")"
+				tx2, err2 := a.clickhouseDB.Begin()
+				if err2 == nil {
+					stmt2, err2 := tx2.Prepare(sqlstr)
+					if err2 == nil {
+						success := true
+						for i := range batch {
+							if _, err2 = stmt2.Exec(buildArgs(a.fieldnames, batch[i])...); err2 != nil {
+								success = false
+								lastErr = err2
+								break
+							}
+						}
+						if success {
+							if err2 = tx2.Commit(); err2 == nil {
+								a.Metrics.IncSuccess(len(batch))
+								return
+							} else {
+								lastErr = err2
+							}
+						} else {
+							_ = tx2.Rollback()
+						}
+					} else {
+						_ = tx2.Rollback()
+						lastErr = err2
+					}
+				} else {
+					lastErr = err2
+				}
+			}
+		}
+
+		a.Metrics.IncFailed(len(batch))
+		if a.OnBatchError != nil {
+			a.OnBatchError(batch, lastErr)
+		}
+		if try < a.maxRetries {
+			backoffDur = a.backoffBase * (1 << try) // экспоненциально: base, 2*base, 4*base...
+			if backoffDur > a.backoffMax {
+				backoffDur = a.backoffMax
+			}
+			time.Sleep(backoffDur)
+			continue
+		}
+		// Если все попытки исчерпаны — вернуть данные в буфер
 		a.m.Lock()
-		a.data = append(a.data, temp...)
+		a.data = append(a.data, batch...)
 		a.m.Unlock()
 		return
 	}
+}
+
+// isConnErr определяет, похоже ли это на ошибку потери соединения
+func isConnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "bad connection") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "driver: bad connection") ||
+		strings.Contains(msg, "connection reset")
 }
 func buildArgs(fn []string, m map[string]interface{}) (res []interface{}) {
 	for i := range fn {
@@ -141,4 +237,19 @@ func buildArgs(fn []string, m map[string]interface{}) (res []interface{}) {
 		}
 	}
 	return res
+}
+
+func (a *ClickhouseStorage) reconnectDB() error {
+	a.m.Lock()
+	defer a.m.Unlock()
+	db, err := InitClickHouseDB(a.config)
+	if err != nil {
+		return err
+	}
+	old := a.clickhouseDB
+	a.clickhouseDB = db
+	if old != nil {
+		_ = old.Close()
+	}
+	return nil
 }
