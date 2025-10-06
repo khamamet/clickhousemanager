@@ -30,36 +30,6 @@ type ClickhouseStorage struct {
 	OnBatchError func(batch []map[string]interface{}, err error)
 }
 
-// InitClickhouseStorage
-// tablename - table name to insert data into (ex: `racing`.`requests`)
-// fieldnames - list of fields in the tablename
-// writetime - how often write data to table
-// maxbatch - if >0 then write data when data count >= maxbatch
-// jsonFields - список полей, которые нужно сериализовать в JSON-строку
-func InitClickhouseStorageWithConfig(config TClickHouseConfig, tablename string, fieldnames []string, writeTime time.Duration, maxbatch int, jsonFields []string, maxRetries int, backoffBase, backoffMax time.Duration) (*ClickhouseStorage, error) {
-	db, err := InitClickHouseDB(config)
-	if err != nil {
-		return nil, err
-	}
-	res := &ClickhouseStorage{
-		clickhouseDB: db,
-		config:       config,
-		fieldnames:   fieldnames,
-		tablename:    tablename,
-		writeTime:    writeTime,
-		maxBatch:     maxbatch,
-		jsonFields:   make(map[string]struct{}),
-		maxRetries:   maxRetries,
-		backoffBase:  backoffBase,
-		backoffMax:   backoffMax,
-	}
-	for _, name := range jsonFields {
-		res.jsonFields[name] = struct{}{}
-	}
-	go res.work()
-	return res, nil
-}
-
 // Add adds data to storage.
 // You may use Struct2Map() func to convert struct to map
 func (a *ClickhouseStorage) Add(s map[string]interface{}) {

@@ -4,11 +4,11 @@ import (
 	"sync/atomic"
 )
 
-// Metrics содержит счетчики успешных и ошибочных вставок
+// Metrics holds counters for monitoring ClickHouse storage operations.
 type Metrics struct {
-	SuccessInserts uint64 // число успешных батчей
-	FailedInserts  uint64 // число неуспешных батчей
-	LastBatchSize  uint64 // размер последнего батча (успешного или нет)
+	SuccessInserts uint64 // count of successful batches
+	FailedInserts  uint64 // count of failed batches
+	LastBatchSize  uint64 // size of the last batch (successful or not)
 }
 
 func (m *Metrics) IncSuccess(batchSize int) {

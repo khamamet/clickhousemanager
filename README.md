@@ -16,6 +16,7 @@ The library features automatic JSON field serialization, time- and size-based ba
 - **Automatic reconnection** to ClickHouse on connection loss
 - **Manual flush (`Store()`)** on demand
 - **Utility to convert Go structs to map** with struct field `db` tags support
+- **Safe escaping of table and field names** for SQL identifiers
 
 ---
 
@@ -36,21 +37,14 @@ cfg := clickhouseconn.TClickHouseConfig{
     ClkDBName:   "default",
 }
 
-// 2. Initialize storage for a table
-fields := []string{"user_id", "changed_at", "changes"}
-jsonFields := []string{"changes"}
-
-storage, err := clickhouseconn.InitClickhouseStorageWithConfig(
-    cfg,
-    "userservice.user_audit_history",
-    fields,
-    2*time.Second,    // flush interval
-    500,              // max batch size
-    jsonFields,
-    5,                // maxRetries
-    time.Second,      // retry base backoff
-    32*time.Second,   // max backoff
-)
+// 2. Initialize storage for a table using config struct (defaults will be used for omitted fields)
+storage, err := clickhouseconn.NewClickhouseStorage(clickhouseconn.ClickhouseStorageConfig{
+    Config:     cfg,
+    TableName:  "userservice.user_audit_history",
+    FieldNames: []string{"user_id", "changed_at", "changes"},
+    JSONFields: []string{"changes"},
+    // Optional: WriteTime, MaxBatch, MaxRetries, BackoffBase, BackoffMax...
+})
 if err != nil {
     panic(err)
 }
@@ -79,8 +73,8 @@ storage.Exit()
 - **InitClickHouseDB(TClickHouseConfig) (\*sql.DB, error)**  
   Connect to ClickHouse using config struct.
 
-- **InitClickhouseStorageWithConfig(config, table, fields, flushInterval, maxBatch, jsonFields, maxRetries, backoffBase, backoffMax) (\*ClickhouseStorage, error)**  
-  Create a storage buffer for asynchronous, batched inserts.
+- **NewClickhouseStorage(ClickhouseStorageConfig) (\*ClickhouseStorage, error)**  
+  Create a storage buffer for asynchronous, batched inserts with optional parameters.
 
 - **Add(map[string]interface{})**  
   Add a record to the buffer.
@@ -116,6 +110,9 @@ storage.Exit()
 - **Manual and automatic flush:**  
   Data is flushed either when the timer triggers, when enough records are buffered, or via explicit `Store()`.
 
+- **Identifier escaping:**  
+  All table and field names are safely escaped with backticks to avoid SQL injection and reserved keywords issues.
+
 - **Thread safety:**  
   It is safe to call `Add` and `Store` from any number of goroutines.
 
@@ -137,11 +134,9 @@ fmt.Printf("Success: %d, Failed: %d, LastBatch: %d\n",
 
 ## Recommendations
 
+- Escaping of table and field names is done automatically, but for best safety, avoid user-controlled names.
 - For high-throughput, consider tuning batch size and flush interval.
 - Use `Struct2Map` with appropriate `db` tags for best compatibility.
-
----
-
 
 ---
 
