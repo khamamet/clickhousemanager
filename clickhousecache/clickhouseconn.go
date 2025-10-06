@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// TClickHouseConfig holds ClickHouse connection parameters
 type TClickHouseConfig struct {
 	ClkAddress  []string //list of clickhouse servers
 	ClkUserName string

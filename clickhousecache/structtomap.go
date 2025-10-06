@@ -23,7 +23,7 @@ func Struct2Map(model interface{}) map[string]interface{} {
 
 	var fieldData interface{}
 
-	for i := 0; i < fieldsCount; i++ {
+	for i := range fieldsCount {
 		field := modelReflect.Field(i)
 
 		key := modelRefType.Field(i).Tag.Get("db")
