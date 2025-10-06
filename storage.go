@@ -126,9 +126,15 @@ func (a *ClickhouseStorage) store() {
 		lastErr    error
 		backoffDur time.Duration
 	)
+	// escape field and table names
+	fieldsEscaped := make([]string, len(a.fieldnames))
+	for i, f := range a.fieldnames {
+		fieldsEscaped[i] = escapeIdent(f)
+	}
+	tableEscaped := escapeTableName(a.tablename)
 
 	for try = 0; try <= a.maxRetries; try++ {
-		sqlstr := "INSERT INTO  " + a.tablename + " (" + strings.Join(a.fieldnames, ",") + ") VALUES (" + strings.Repeat("?", len(a.fieldnames)) + ")"
+		sqlstr := "INSERT INTO " + tableEscaped + " (" + strings.Join(fieldsEscaped, ",") + ") VALUES (" + strings.Repeat("?", len(a.fieldnames)) + ")"
 
 		tx, err := a.clickhouseDB.Begin()
 		if err != nil {
@@ -215,6 +221,16 @@ func (a *ClickhouseStorage) store() {
 		a.m.Unlock()
 		return
 	}
+}
+func escapeIdent(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
+}
+func escapeTableName(tbl string) string {
+	parts := strings.Split(tbl, ".")
+	for i, p := range parts {
+		parts[i] = escapeIdent(p)
+	}
+	return strings.Join(parts, ".")
 }
 
 // isConnErr определяет, похоже ли это на ошибку потери соединения
