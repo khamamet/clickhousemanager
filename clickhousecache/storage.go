@@ -3,6 +3,7 @@ package clickhousecache
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,9 +33,9 @@ type ClickhouseStorage struct {
 
 // Add adds data to storage.
 // You may use Struct2Map() func to convert struct to map
-func (a *ClickhouseStorage) Add(s map[string]any) {
+func (a *ClickhouseStorage) Add(s map[string]any) error {
 	if atomic.LoadInt64(&a.quit) == 1 {
-		return
+		return errors.New("storage is exiting")
 	}
 	// сериализуем JSON-поля
 	for field := range a.jsonFields {
@@ -59,6 +60,7 @@ func (a *ClickhouseStorage) Add(s map[string]any) {
 	if trigger {
 		go a.store()
 	}
+	return nil
 }
 
 func (a *ClickhouseStorage) work() {
