@@ -228,7 +228,7 @@ func buildArgs(fn []string, m map[string]interface{}) (res []interface{}) {
 func (a *ClickhouseStorage) reconnectDB() error {
 	a.m.Lock()
 	defer a.m.Unlock()
-	db, err := InitClickHouseDB(a.config)
+	db, err := initClickHouseDB(a.config)
 	if err != nil {
 		return err
 	}

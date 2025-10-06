@@ -15,7 +15,7 @@ type TClickHouseConfig struct {
 	LoadSec     int
 }
 
-func InitClickHouseDB(c TClickHouseConfig) (clkDB *sql.DB, err error) {
+func initClickHouseDB(c TClickHouseConfig) (clkDB *sql.DB, err error) {
 	if len(c.ClkAddress) == 0 {
 		return nil, errors.New("you should provide at least one server address in config")
 	}

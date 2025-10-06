@@ -33,7 +33,7 @@ func NewClickhouseStorage(cfg ClickhouseStorageConfig) (*ClickhouseStorage, erro
 		cfg.BackoffMax = 30 * time.Second
 	}
 
-	db, err := InitClickHouseDB(cfg.Config)
+	db, err := initClickHouseDB(cfg.Config)
 	if err != nil {
 		return nil, err
 	}
