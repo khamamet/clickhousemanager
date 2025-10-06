@@ -1,4 +1,4 @@
-package clickhouseconn
+package clickhousecache
 
 import (
 	"sync/atomic"
