@@ -10,6 +10,9 @@ import (
 )
 
 type ClickhouseStorage struct {
+	Metrics      Metrics
+	OnBatchError func(batch []map[string]any, err error)
+
 	quit         int64
 	m            sync.Mutex
 	clickhouseDB *sql.DB
@@ -18,21 +21,18 @@ type ClickhouseStorage struct {
 	writeTime  time.Duration
 	fieldnames []string
 	tablename  string
-	data       []map[string]interface{}
+	data       []map[string]any
 	maxBatch   int
 	jsonFields map[string]struct{}
 	// retry policy
 	maxRetries  int           // maximum number of retries
 	backoffBase time.Duration // base delay between retries
 	backoffMax  time.Duration // maximum delay between retries
-
-	Metrics      Metrics
-	OnBatchError func(batch []map[string]interface{}, err error)
 }
 
 // Add adds data to storage.
 // You may use Struct2Map() func to convert struct to map
-func (a *ClickhouseStorage) Add(s map[string]interface{}) {
+func (a *ClickhouseStorage) Add(s map[string]any) {
 	if atomic.LoadInt64(&a.quit) == 1 {
 		return
 	}
