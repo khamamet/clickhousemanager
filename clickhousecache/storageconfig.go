@@ -1,6 +1,7 @@
 package clickhousecache
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -40,7 +41,35 @@ type ClickhouseStorage struct {
 	backoffMax  time.Duration
 }
 
+var (
+	ErrNoTableName          = errors.New("no table name provided in config")
+	ErrNoFieldNames         = errors.New("no field names provided in config")
+	ErrNoClickhouseAddress  = errors.New("no ClickHouse address provided in config")
+	ErrNoClickhouseDBName   = errors.New("no ClickHouse database name provided in config")
+	ErrNoClickhouseUserName = errors.New("no ClickHouse user name provided in config")
+)
+
 func NewClickhouseStorage(cfg ClickhouseStorageConfig) (*ClickhouseStorage, error) {
+	//check mandatory params
+	if cfg.TableName == "" {
+		return nil, ErrNoTableName
+	}
+	if len(cfg.FieldNames) == 0 {
+		return nil, ErrNoFieldNames
+	}
+	if len(cfg.Config.ClkAddress) == 0 {
+		return nil, ErrNoClickhouseAddress
+	}
+	if cfg.Config.ClkDBName == "" {
+		return nil, ErrNoClickhouseDBName
+	}
+	if cfg.Config.ClkUserName == "" {
+		return nil, ErrNoClickhouseUserName
+	}
+	if cfg.Config.MaxOpenConns <= 0 {
+		cfg.Config.MaxOpenConns = 10
+	}
+
 	// Defaults
 	if cfg.WriteTime == 0 {
 		cfg.WriteTime = 2 * time.Second
@@ -56,6 +85,15 @@ func NewClickhouseStorage(cfg ClickhouseStorageConfig) (*ClickhouseStorage, erro
 	}
 	if cfg.BackoffMax == 0 {
 		cfg.BackoffMax = 30 * time.Second
+	}
+	if cfg.Config.DialTimeout == 0 {
+		cfg.Config.DialTimeout = 5 * time.Second
+	}
+	if cfg.Config.ReadTimeout == 0 {
+		cfg.Config.ReadTimeout = 60 * time.Second
+	}
+	if cfg.Config.WriteTimeout == 0 {
+		cfg.Config.WriteTimeout = 60 * time.Second
 	}
 
 	db, err := initClickHouseDB(cfg.Config) // теперь возвращает clickhouse.Conn
