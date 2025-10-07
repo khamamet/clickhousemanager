@@ -21,7 +21,7 @@ func initClickHouseDB(c TClickHouseConfig) (clkDB *sql.DB, err error) {
 		return nil, errors.New("you should provide at least one server address in config")
 	}
 
-	clkConnStr := "tcp://" + c.ClkAddress[0] + "?password=" + c.ClkPassword + "&database=" + c.ClkDBName + "&read_timeout=600&write_timeout=600"
+	clkConnStr := "tcp://" + c.ClkAddress[0] + "?password=" + c.ClkPassword + "&database=" + c.ClkDBName + "&read_timeout=600s&write_timeout=600s"
 	if c.ClkUserName != "" {
 		clkConnStr += "&username=" + c.ClkUserName
 	}
