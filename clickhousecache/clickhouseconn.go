@@ -1,43 +1,56 @@
 package clickhousecache
 
 import (
-	"database/sql"
 	"errors"
-	"strings"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"golang.org/x/net/context"
 )
 
 // TClickHouseConfig holds ClickHouse connection parameters
 type TClickHouseConfig struct {
-	ClkAddress  []string //list of clickhouse servers
-	ClkUserName string
-	ClkPassword string
-	ClkMaxConn  int
-	ClkDBName   string
-	LoadSec     int
+	ClkAddress   []string // list of clickhouse servers (host:port)
+	ClkDBName    string
+	ClkUserName  string
+	ClkPassword  string
+	MaxOpenConns int
+	DialTimeout  time.Duration
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 }
 
-func initClickHouseDB(c TClickHouseConfig) (clkDB *sql.DB, err error) {
+// Returns clickhouse.Conn (native v2 API)
+func initClickHouseDB(c TClickHouseConfig) (conn clickhouse.Conn, err error) {
 	if len(c.ClkAddress) == 0 {
 		return nil, errors.New("you should provide at least one server address in config")
 	}
 
-	clkConnStr := "tcp://" + c.ClkAddress[0] + "?password=" + c.ClkPassword + "&database=" + c.ClkDBName + "&read_timeout=600s&write_timeout=600s"
-	if c.ClkUserName != "" {
-		clkConnStr += "&username=" + c.ClkUserName
-	}
-
-	if len(c.ClkAddress) > 1 {
-		clkConnStr += "&alt_hosts=" + strings.Join(c.ClkAddress[1:], ",") + "&connection_open_strategy=random"
-	}
-
-	clkDB, err = sql.Open("clickhouse", clkConnStr)
+	conn, err = clickhouse.Open(&clickhouse.Options{
+		Addr: c.ClkAddress,
+		Auth: clickhouse.Auth{
+			Database: c.ClkDBName,
+			Username: c.ClkUserName,
+			Password: c.ClkPassword,
+		},
+		// Native pooling and timeouts
+		DialTimeout: c.DialTimeout,
+		// Read/WriteTimeout are for query execution, not for the connection itself
+		ReadTimeout: c.ReadTimeout,
+		// Settings: optional, e.g. AltHosts for failover
+		Settings: map[string]interface{}{
+			"max_execution_time": 60,
+		},
+		MaxOpenConns: c.MaxOpenConns,
+	})
 	if err != nil {
-		return
+		return nil, err
 	}
-	if err = clkDB.Ping(); err != nil {
-		return
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.DialTimeout)
+	defer cancel()
+	if err := conn.Ping(ctx); err != nil {
+		return nil, err
 	}
-	clkDB.SetMaxIdleConns(c.ClkMaxConn)
-	clkDB.SetMaxOpenConns(c.ClkMaxConn)
-	return
+	return conn, nil
 }
